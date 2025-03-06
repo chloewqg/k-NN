@@ -6,11 +6,13 @@
 package org.opensearch.knn.index.engine;
 
 import com.google.common.collect.ImmutableSet;
+import org.opensearch.Version;
 import org.opensearch.common.ValidationException;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.engine.faiss.Faiss;
 import org.opensearch.knn.index.engine.lucene.Lucene;
 import org.opensearch.knn.index.engine.nmslib.Nmslib;
+import org.opensearch.knn.index.remote.RemoteIndexParameters;
 
 import java.util.List;
 import java.util.Map;
@@ -25,11 +27,12 @@ import static org.opensearch.knn.common.KNNConstants.NMSLIB_NAME;
  * passed to the respective k-NN library's JNI layer.
  */
 public enum KNNEngine implements KNNLibrary {
-    NMSLIB(NMSLIB_NAME, Nmslib.INSTANCE),
+    NMSLIB(NMSLIB_NAME, Nmslib.INSTANCE, Version.V_3_0_0),
     FAISS(FAISS_NAME, Faiss.INSTANCE),
     LUCENE(LUCENE_NAME, Lucene.INSTANCE);
 
     public static final KNNEngine DEFAULT = FAISS;
+    private final Version restrictedFromVersion; // Nullable field
 
     private static final Set<KNNEngine> CUSTOM_SEGMENT_FILE_ENGINES = ImmutableSet.of(KNNEngine.NMSLIB, KNNEngine.FAISS);
     private static final Set<KNNEngine> ENGINES_SUPPORTING_FILTERS = ImmutableSet.of(KNNEngine.LUCENE, KNNEngine.FAISS);
@@ -53,6 +56,16 @@ public enum KNNEngine implements KNNLibrary {
     KNNEngine(String name, KNNLibrary knnLibrary) {
         this.name = name;
         this.knnLibrary = knnLibrary;
+        this.restrictedFromVersion = null;
+    }
+
+    /**
+     * Constructor for deprecated engines.
+     */
+    KNNEngine(String name, KNNLibrary knnLibrary, Version restrictedVersion) {
+        this.name = name;
+        this.knnLibrary = knnLibrary;
+        this.restrictedFromVersion = restrictedVersion;
     }
 
     private final String name;
@@ -78,6 +91,17 @@ public enum KNNEngine implements KNNLibrary {
         }
 
         throw new IllegalArgumentException(String.format("Invalid engine type: %s", name));
+    }
+
+    /**
+     * Checks if the KNN engine is deprecated for a given OpenSearch version.
+     *
+     * @param indexVersionCreated The OpenSearch version in which the index is being created.
+     * @return {@code true} if the engine is deprecated in the specified version or later, {@code false} otherwise.
+     */
+    @Override
+    public boolean isRestricted(Version indexVersionCreated) {
+        return restrictedFromVersion != null && indexVersionCreated.onOrAfter(restrictedFromVersion);
     }
 
     /**
@@ -127,6 +151,15 @@ public enum KNNEngine implements KNNLibrary {
      */
     public String getName() {
         return name;
+    }
+
+    /**
+     * Get the Deprecated Version
+     *
+     * @return Deprecated Version
+     */
+    public Version getRestrictedFromVersion() {
+        return restrictedFromVersion;
     }
 
     @Override
@@ -215,5 +248,10 @@ public enum KNNEngine implements KNNLibrary {
     @Override
     public boolean supportsRemoteIndexBuild() {
         return knnLibrary.supportsRemoteIndexBuild();
+    }
+
+    @Override
+    public RemoteIndexParameters createRemoteIndexingParameters(Map<String, Object> indexInfoParameters) {
+        return knnLibrary.createRemoteIndexingParameters(indexInfoParameters);
     }
 }

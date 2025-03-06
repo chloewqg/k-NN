@@ -19,7 +19,6 @@ import org.apache.hc.core5.net.URIBuilder;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.opensearch.Version;
-import org.opensearch.common.xcontent.support.XContentMapValues;
 import org.opensearch.client.Request;
 import org.opensearch.client.Response;
 import org.opensearch.common.settings.Settings;
@@ -87,8 +86,6 @@ import static org.opensearch.knn.TestUtils.QUERY_VALUE;
 import static org.opensearch.knn.TestUtils.VECTOR_TYPE;
 import static org.opensearch.knn.TestUtils.computeGroundTruthValues;
 import static org.opensearch.knn.common.KNNConstants.CLEAR_CACHE;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.notNullValue;
 import static org.opensearch.knn.common.KNNConstants.DIMENSION;
 import static org.opensearch.knn.common.KNNConstants.ENCODER_PARAMETER_PQ_CODE_SIZE;
 import static org.opensearch.knn.common.KNNConstants.ENCODER_PARAMETER_PQ_M;
@@ -112,6 +109,7 @@ import static org.opensearch.knn.common.KNNConstants.VECTOR_DATA_TYPE_FIELD;
 import static org.opensearch.knn.index.KNNSettings.INDEX_KNN_ADVANCED_APPROXIMATE_THRESHOLD;
 import static org.opensearch.knn.index.KNNSettings.KNN_INDEX;
 import static org.opensearch.knn.index.KNNSettings.KNN_INDEX_REMOTE_VECTOR_BUILD;
+import static org.opensearch.knn.index.KNNSettings.KNN_INDEX_REMOTE_VECTOR_BUILD_THRESHOLD;
 import static org.opensearch.knn.index.SpaceType.L2;
 import static org.opensearch.knn.index.engine.KNNEngine.FAISS;
 import static org.opensearch.knn.index.memory.NativeMemoryCacheManager.GRAPH_COUNT;
@@ -993,8 +991,10 @@ public class KNNRestTestCase extends ODFERestTestCase {
             .put(KNN_INDEX, true)
             .put(INDEX_KNN_ADVANCED_APPROXIMATE_THRESHOLD, approximateThreshold);
 
-        if (isRemoteIndexBuildSupported(getBWCVersion())) {
-            builder.put(KNN_INDEX_REMOTE_VECTOR_BUILD, randomBoolean());
+        // Randomly enable remote index build feature to test fallbacks
+        if (isRemoteIndexBuildSupported(getBWCVersion()) && randomBoolean()) {
+            builder.put(KNN_INDEX_REMOTE_VECTOR_BUILD, true);
+            builder.put(KNN_INDEX_REMOTE_VECTOR_BUILD_THRESHOLD, "0mb");
         }
         return builder.build();
     }
@@ -1811,13 +1811,7 @@ public class KNNRestTestCase extends ODFERestTestCase {
         Integer m,
         Integer ef_construction
     ) {
-        return Settings.builder()
-            .put(NUMBER_OF_SHARDS, 1)
-            .put(NUMBER_OF_REPLICAS, 0)
-            .put(INDEX_KNN, true)
-            .put(KNNSettings.KNN_SPACE_TYPE, spaceType.getValue())
-            .put(KNNSettings.KNN_ALGO_PARAM_M, m)
-            .put(KNNSettings.KNN_ALGO_PARAM_EF_CONSTRUCTION, ef_construction);
+        return Settings.builder().put(NUMBER_OF_SHARDS, 1).put(NUMBER_OF_REPLICAS, 0).put(INDEX_KNN, true);
     }
 
     protected Settings createKNNIndexCustomLegacyFieldMappingIndexSettings(SpaceType spaceType, Integer m, Integer ef_construction) {
@@ -2285,11 +2279,11 @@ public class KNNRestTestCase extends ODFERestTestCase {
         assertEquals(request.getEndpoint() + ": failed", RestStatus.OK, RestStatus.fromCode(response.getStatusLine().getStatusCode()));
     }
 
-    protected void addKnnDocWithAttributes(
+    protected <T> void addKnnDocWithAttributes(
         String indexName,
         String docId,
         String vectorFieldName,
-        float[] vector,
+        T vector,
         Map<String, String> fieldValues
     ) throws IOException {
         Request request = new Request("POST", "/" + indexName + "/_doc/" + docId + "?refresh=true");
@@ -2376,17 +2370,7 @@ public class KNNRestTestCase extends ODFERestTestCase {
 
     @SneakyThrows
     protected void setupSnapshotRestore(String index, String snapshot, String repository) {
-        Request clusterSettingsRequest = new Request("GET", "/_cluster/settings");
-        clusterSettingsRequest.addParameter("include_defaults", "true");
-        Response clusterSettingsResponse = client().performRequest(clusterSettingsRequest);
-        Map<String, Object> clusterSettings = entityAsMap(clusterSettingsResponse);
-
-        @SuppressWarnings("unchecked")
-        List<String> pathRepos = (List<String>) XContentMapValues.extractValue("defaults.path.repo", clusterSettings);
-        assertThat(pathRepos, notNullValue());
-        assertThat(pathRepos, hasSize(1));
-
-        final String pathRepo = pathRepos.get(0);
+        final String pathRepo = System.getProperty("tests.path.repo");
 
         // create index
         createIndex(index, getDefaultIndexSettings());
